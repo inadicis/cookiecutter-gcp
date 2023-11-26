@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 from collections import OrderedDict
-import pkg_resources
 
 import cookiecutter
 
@@ -24,7 +23,6 @@ context: OrderedDict = {{ cookiecutter }}
 versions = {
     "python": sys.version,
     "cookiecutter": cookiecutter.__version__,
-    "dists": [str(d) for d in pkg_resources.working_set]
 }
 with open(repo_path / "cookiecutter" / "cc_context.jsonl", "a") as f:
     pprint.pprint(dict(context))
@@ -167,7 +165,7 @@ import pytest
 pytest_exit_code = pytest.main()
 if pytest_exit_code != 0:
     sys.exit(pytest_exit_code)
-{%- endif %}
+{% endif %}
 
 print("\n" + "=" * 100)
 print(f"Repo creation finished at {repo_path}.\nSee next steps in new projects' "

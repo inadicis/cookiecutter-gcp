@@ -6,7 +6,7 @@ Provides easy project creation through a command line interface (cookiecutter),
 with the configuration of the tech-stack provided (especially GCP CI/CD pipeline,
 but also logging, databases, fastapi, socketio, pubsubs, ssr etc.)."""
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 #license
 authors = [
     { name = "Nils Cichy", email = "nilsdaniel.cichy@gmail.com" }
