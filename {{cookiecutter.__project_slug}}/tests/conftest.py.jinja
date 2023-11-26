@@ -20,6 +20,7 @@ import uvicorn
 import asyncio
 import httpx
 {% endif %}
+from socketio import ASGIApp, async_manager
 
 from src import config, main, authentication, constants, local_logging, routes
 from src.config import DeployEnvironments, TEST_DIR
@@ -79,7 +80,8 @@ def include_test_routers(monkeypatch) -> None:
 @pytest.fixture()
 def sio_app() -> socketio.AsyncServer:
     # replace redis server to an internal backend for tests
-    sio.manager = socketio.asyncio_manager.AsyncManager()
+
+    sio.manager = async_manager.AsyncManager()
     sio.manager.set_server(sio)
     sio.manager_initialized = False
 
