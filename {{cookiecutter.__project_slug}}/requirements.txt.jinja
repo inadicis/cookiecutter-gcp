@@ -48,11 +48,6 @@ google-cloud-pubsub
 
 regex
 
-{% if cookiecutter.use_filters_package | bool -%}
-# Internal packages
-${PYPITOKEN}ella_filtersapi
-{% endif -%}
-
 {% if cookiecutter.use_socketio | bool -%}
 websockets
 python-socketio

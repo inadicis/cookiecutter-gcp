@@ -41,9 +41,6 @@ google-cloud-pubsub
 
 regex
 
-# Internal packages
-${PYPITOKEN}ella_filtersapi
-
 websockets
 python-socketio
 aiohttp

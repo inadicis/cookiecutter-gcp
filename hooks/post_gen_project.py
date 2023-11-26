@@ -48,7 +48,6 @@ print("\n" + "=" * 100)
 print("Removing extra files...")
 
 REMOVE_PATHS = [
-    "tests/test_filterable_documents.py",
     ".ruff_cache",
     {% if not cookiecutter.database | bool %}
     "src/documents.py",

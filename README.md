@@ -98,10 +98,6 @@ subscription (using the GCP PubSub product).
 - Example subscription - push route, decoding etc.
 - Example publish to PubSub Topic
 
-#### use_filters_package - Server Side Rendered Filters
-
-Whether to include (Yes/No) code for dynamically rendered filter options for any DB resource,
-using the private package `ella-filteraspi`.
 
 #### use_auth0 - Authentication and Authorization
 

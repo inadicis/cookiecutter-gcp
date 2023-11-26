@@ -34,7 +34,6 @@
       "use_auth0": "Do you want to use auth0? (y/N)",
       "use_socketio": "Do you want to use WebSockets (socket.io)? (y/N)",
       "use_graphql": "Do you want to use GraphQL (straberry)? (y/N)",
-      "use_filters_package" : "Do you want to use the ella-filtersapi package? (y/N)",
       "use_gcp_pubsub" : "Do you want to use gcp PubSubs? (y/N)",
       "use_server_side_rendering": "Do you want server side rendering with jinja? (y/N)",
       "use_gradio": "Do you want a GUI with gradio? (y/N)"

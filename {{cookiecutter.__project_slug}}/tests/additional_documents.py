@@ -3,10 +3,6 @@ import uuid
 from beanie import Document
 from pydantic import BaseModel, Field
 
-from ella_filtersapi import FilterFieldTypes
-
-from src.documents import FilterableDocument
-
 
 
 class SimpleDocument(Document):
