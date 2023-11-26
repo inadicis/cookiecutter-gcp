@@ -4,13 +4,10 @@ steps:
     entrypoint: 'bash'
     args:
       - '-c'
-      - 'docker build {% if cookiecutter.__requires_pypitoken | bool %} --build-arg PYPITOKEN=$${PYPITOKEN} {% endif %} -t testimage -f deployment/Dockerfile-test . '
+      - 'docker build -t testimage -f deployment/Dockerfile-test . '
 {#    TODO: use BUILDKIT secret managing, not build-arg#}
     env:
       - 'DOCKER_BUILDKIT=1'
-    {% if cookiecutter.__requires_pypitoken | bool -%}
-    secretEnv: [ 'PYPITOKEN' ]
-    {% endif %}
 
   - id: Run-tests
     name: 'gcr.io/cloud-builders/docker'
@@ -25,18 +22,12 @@ steps:
     args:
       - '-c'
       - "docker build \
-      {% if cookiecutter.__requires_pypitoken | bool -%}
-      --build-arg PYPITOKEN=$${PYPITOKEN} \
-      {% endif -%}
       -t $_DEPLOY_REGION-docker.pkg.dev/\
       $PROJECT_ID/${_IMAGE_REPOSITORY}/${_IMAGE}:${TAG_NAME} \
       -f deployment/Dockerfile \
       ."
     env:
       - 'DOCKER_BUILDKIT=1'
-    {% if cookiecutter.__requires_pypitoken | bool -%}
-    secretEnv: [ 'PYPITOKEN' ]
-    {% endif %}
 
   - id: Push-image-to-registry
     name: 'gcr.io/cloud-builders/docker'
@@ -97,13 +88,6 @@ steps:
         {%- endif %}
         {% endif %}
       "
-
-{% if cookiecutter.__requires_pypitoken | bool -%}
-availableSecrets:
-  secretManager:
-    - versionName: projects/973126144520/secrets/PYPITOKEN_ENV_VAR/versions/latest
-      env: 'PYPITOKEN'
-{% endif -%}
 
 tags:
   - build

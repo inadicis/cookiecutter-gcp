@@ -5,11 +5,6 @@ WORKDIR /app
 
 COPY requirements.txt requirements.txt
 
-{% if cookiecutter.__requires_pypitoken | bool %}
-ARG PYPITOKEN
-ENV PYPITOKEN=${PYPITOKEN}
-{% endif %}
-
 RUN python3 -m pip install --no-cache-dir --upgrade -r requirements.txt
 
 COPY ./ .

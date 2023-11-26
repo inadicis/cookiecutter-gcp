@@ -19,7 +19,6 @@
   "__image_name": "{{ cookiecutter.__project_slug }}",
   "__image_repo": "{{ cookiecutter.__project_slug.replace('_', '-') }}",
   "__db_name": "{{ cookiecutter.__project_slug }}",
-  "__requires_pypitoken" : "{{ cookiecutter.use_filters_package }}",
   "__requires_redis" : "{{ cookiecutter.use_socketio }}",
   "__mongodb": "{{ 'mongo' in cookiecutter.database }}",
   "__async_db_driver": "{{ 'beanie' in cookiecutter.database or 'motor' in cookiecutter.database }}",
