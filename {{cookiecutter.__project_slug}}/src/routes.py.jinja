@@ -1,0 +1,224 @@
+import uuid
+import base64
+import json
+import logging
+from typing import Annotated
+from functools import lru_cache
+
+import pydantic
+from pydantic import BaseModel, Extra, ConfigDict
+from fastapi import APIRouter, Security, HTTPException, Depends
+from starlette import status
+from starlette.requests import Request
+{% if cookiecutter.use_socketio | bool %}
+import socketio
+{% endif %}
+{% if cookiecutter.use_gcp_pubsub | bool %}
+from google.cloud import pubsub_v1
+from google.cloud.pubsub_v1.futures import Future
+{% endif %}
+from starlette.responses import RedirectResponse
+
+from src import config
+from src.config.templates import templates
+from src.config.env_settings import EnvSettings, get_env_settings
+from src.config.project_settings import ProjectSettings, get_project_settings
+{% if cookiecutter.use_auth0 | bool %}
+from src.authentication import AuthUser, get_user, Permissions, JWTFaker{% if cookiecutter.use_gcp_pubsub | bool %}, pubsub_auth{% endif %}{% if cookiecutter.use_socketio | bool %}, check_ws_auth{% endif %}
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+from src.config.sockets import sio
+from starlette.requests import Request
+from starlette.responses import HTMLResponse
+{% endif %}
+
+
+main_router = APIRouter(tags=["Main Router"])
+
+
+@main_router.get("/")
+async def home_page():
+    return RedirectResponse("/docs")
+
+{% if cookiecutter.use_server_side_rendering | bool %}
+
+@main_router.get("/html")
+async def example_ssr_route(request: Request):
+    # resources_ids = [["id1", "john"], ["id3", "Hanz"], ["id352", "Pete"]]
+    return templates.TemplateResponse(
+        "example.html",
+        {"request": request, 
+         # "table": resources_ids
+        }
+    )
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+@lru_cache(maxsize=1)
+def get_asyncapi_schema():
+    with open(config.DOCS_DIR / "asyncapi.yaml", "r") as f:
+        return f.read()
+
+@main_router.get("/wsdocs", response_class=HTMLResponse)
+async def get_ws_docs(
+    request: Request,
+    project_settings: Annotated[ProjectSettings, Depends(get_project_settings)]
+):
+
+    return templates.TemplateResponse(
+        "wsdocs.html.jinja",
+        {
+            "request": request,
+            "schema": get_asyncapi_schema(),
+            "info": {
+                "title": project_settings.name,
+                "version": project_settings.version,
+                "description": project_settings.description.replace("\n", " ")
+            }
+        }
+    )
+
+{% endif %}
+
+
+{% if cookiecutter.use_gcp_pubsub | bool %}
+
+# TODO-CONFIG: here you have example of the wrapping for pubsub integration.
+#  obviously there is not actual business logic though.
+#  (see `business_logic()` and `MyOptions`)
+
+class PubsubAttributesIn(BaseModel):
+
+    model_config = ConfigDict(extra = Extra.allow)
+
+
+# based on google.pubsub_v1.PubsubMessage
+class PubsubMessage(BaseModel):
+    data: bytes = pydantic.Field(
+        ...,
+        description="The message data field. Contains the request body for the actual route "
+                    "encoded in base 64"
+    )
+    attributes: PubsubAttributesIn = pydantic.Field(
+        PubsubAttributesIn(),
+        description="Attributes for this message. "
+                    "Used to filter messages on the subscription."
+    )
+    message_id: str = pydantic.Field(
+        ...,
+        description="ID of this message, assigned by the server when the message "
+                    "is published. Guaranteed to be unique within the topic. "
+    )
+
+    publish_time: str = pydantic.Field(
+        ...,
+        description="The time at which the message was published, populated by "
+                    "the server when it receives the ``Publish`` call."
+    )
+    ordering_key: str = pydantic.Field(
+        default=None,
+        description="If non-empty, identifies related messages for which publish "
+                    "order should be respected. If a ``Subscription`` has "
+                    "``enable_message_ordering`` set to ``true``, messages "
+                    "published with the same non-empty ``ordering_key`` value "
+                    "will be delivered to subscribers in the order in which they "
+                    "are received by the Pub/Sub system. All ``PubsubMessage``s "
+                    "published in a given ``PublishRequest`` must specify the "
+                    "same ``ordering_key`` value. For more information, see "
+                    "`ordering"
+                    "messages <https://cloud.google.com/pubsub/docs/ordering>`__. "
+    )
+
+    model_config = ConfigDict(extra = Extra.allow)
+
+    def decode_data(self) -> bytes:
+        return base64.b64decode(self.data)
+
+
+class PubsubPush(BaseModel):
+    message: PubsubMessage
+    subscription: str
+
+    model_config = ConfigDict(extra = Extra.allow)
+
+    def extract_data(self) -> bytes:
+        return self.message.decode_data()
+
+
+class MyOptions(BaseModel):
+    original: str
+    ...
+
+def business_logic(options: MyOptions):
+    ...
+
+def publish_response(response_message: dict | list | str,
+                     settings: EnvSettings) -> Future:
+    pubsub_publisher = pubsub_v1.PublisherClient()
+    logging.info(f"Sending pubsub message response with body {response_message}")
+    topic = pubsub_publisher.topic_path(settings.pubsub_project_id, settings.pubsub_topic)
+    encoded_data = json.dumps(response_message).encode("utf-8")
+    return pubsub_publisher.publish(
+        topic=topic,
+        data=encoded_data,
+        # kwargs -> attributes
+    )
+
+
+@main_router.post("/pubsub/")
+async def catch_pubsub_message(
+    pubsub_push: PubsubPush,
+    settings: Annotated[EnvSettings, Depends(get_env_settings)],
+    # sa_claim: Annotated[str, Security(pubsub_auth, scopes=[]]),
+    # TODO-CONFIG `sa_claim` if pubsub auth is wanted
+):
+    """
+    Wrapper route handling pubsub authentication and decoding, before
+    calling the next route with the actual content.
+    """
+    message_body: dict = json.loads(pubsub_push.extract_data())
+    # you could e.g. dispatch here to different business logic
+    # based on `pubsub_push.message.attributes`
+    try:
+        options = MyOptions(**message_body)
+        result = business_logic(options)
+        response_message = {"success": True, "result": result}
+    except pydantic.ValidationError as e:
+        response_message = {"success": False, "error": str(e)}
+
+    future = publish_response(response_message=response_message, settings=settings)
+    return future.result(timeout=2)
+
+    # TODO Handle publish retries or cache result
+    #  If the publishing failed, a 500 happens -> pubsub message not aknowledged,
+    #  it will retry later. But the result did actually work, we probably dont want to re-generate
+
+
+@main_router.post("/direct/")
+async def my_actual_route(
+    options: MyOptions,
+    settings: Annotated[EnvSettings, Depends(get_env_settings)],
+    {%  if cookiecutter.use_auth0 | bool %}
+    user: Annotated[AuthUser, Security(get_user(), scopes=[Permissions.ADMIN])]
+    {% endif %}
+):
+    return business_logic(options)
+{% endif %}
+
+
+local_router = APIRouter(tags=["Routes only accessible when deployed locally"])
+
+
+@local_router.get("/")
+async def local_home_page():
+    return "Hello localhost"
+
+{% if cookiecutter.use_auth0 | bool %}
+class JWTPayloadIn(BaseModel):
+    sub: str = "google-auth|fakedauthuser"
+    permissions: list[str] = Permissions._all()
+
+
+@local_router.post("/jwt/")
+async def generate_fake_jwt(jwt_payload: JWTPayloadIn):
+    return JWTFaker(**jwt_payload.model_dump(exclude_none=True)).get_signed_jwt()
+{% endif %}

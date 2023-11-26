@@ -1,0 +1,266 @@
+import os
+from logging.config import dictConfig
+from typing import Callable, IO
+from functools import lru_cache
+import json
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from strawberry import Schema
+
+{% if cookiecutter.database == "MongoDB (beanie)" or cookiecutter.database == "MongoDB (motor.io)(wip)" %}
+from mongomock_motor import AsyncMongoMockClient
+{% elif cookiecutter.database == "MongoDB (pymongo)" %}
+from mongomock.mongo_client import MongoClient
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+import socketio
+import uvicorn
+import asyncio
+import httpx
+{% endif %}
+
+from src import config, main, authentication, constants, local_logging, routes
+from src.config import DeployEnvironments, TEST_DIR
+from src.config.env_settings import EnvSettings, get_env_settings
+from src.config.local import LOGS_DIR, LogConfig
+from src.config.routing import ROUTERS
+from src.main import fastapi_app
+{% if cookiecutter.database == "MongoDB (beanie)" %}
+from src.config.database import DOCUMENTS
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+from src.config.sockets import get_event_handlers
+{% endif %}
+{% if cookiecutter.use_auth0 | bool %}
+from src.authentication import Permissions
+from src.authentication import admin_jwt, alien_jwt, AuthUser
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+from src.config.sockets import sio
+{% endif %}
+{% if cookiecutter.database == "MongoDB (beanie)" %}
+from tests.additional_documents import TEST_DOCUMENTS
+{% elif cookiecutter.database == "MongoDB (pymongo)"%}
+from src.documents import Document
+{% endif %}
+from tests.additional_routes import test_router
+{% if cookiecutter.use_graphql | bool %}
+from src.graphql import schema
+{% endif %}
+
+
+test_logs_file = "tests.log"
+
+
+@pytest.fixture(autouse=True)
+def override_settings(monkeypatch) -> None:
+    {% if cookiecutter.use_auth0 | bool %}
+    monkeypatch.setenv("MOCK_AUTH", "true")
+    {% endif %}
+    monkeypatch.setenv("DEPLOY_ENVIRONMENT", "TEST")
+    get_env_settings.cache_clear()
+
+
+@pytest.fixture()
+def override_logs_file(monkeypatch) -> None:
+    monkeypatch.setattr(config.local, "LOG_FILE_NAME", test_logs_file)
+
+
+@pytest.fixture()
+def include_test_routers(monkeypatch) -> None:
+    def get_test_routers(local: bool = True):
+        return [*ROUTERS, (routes.local_router, "/local"), (test_router, "/tests")]
+    monkeypatch.setattr(config.routing, "get_routers", get_test_routers)
+
+
+{% if cookiecutter.use_socketio | bool %}
+@pytest.fixture()
+def sio_app() -> socketio.AsyncServer:
+    # replace redis server to an internal backend for tests
+    sio.manager = socketio.asyncio_manager.AsyncManager()
+    sio.manager.set_server(sio)
+    sio.manager_initialized = False
+
+    # deactivate monitoring task in python-socketio to avoid errors during shutdown
+    sio.eio.start_service_task = False
+
+    for event_handler, event in get_event_handlers(local=True):
+        sio.on(event, handler=event_handler)
+
+    # additional event handlers only for tests
+    @sio.on("get-session")
+    async def get_session(sid):
+        await sio.emit("server-session", await sio.get_session(sid), to=sid)
+
+    return sio
+    # uses internal backend instead of redis
+
+
+@pytest.fixture()
+def app(sio_app, override_settings, override_logs_file, include_test_routers) -> socketio.ASGIApp:
+    fastapi_app.include_router(test_router, prefix="/tests")
+    return socketio.ASGIApp(
+        sio_app,
+        fastapi_app,
+        socketio_path="/ws",
+    )
+
+
+@pytest.fixture
+async def server_port(app, testrun_uid) -> int:
+    """
+    Start server as test fixture and tear down after test
+    yields the port number
+    """
+
+    class UvicornTestServer(uvicorn.Server):
+        """Uvicorn test server
+
+        Usage:
+            @pytest.fixture
+            async def start_stop_server():
+                server = UvicornTestServer()
+                await server.up()
+                yield
+                await server.down()
+        """
+
+        def __init__(self, app: str = app, host: str = "127.0.0.1", port: int = 0):
+            """Create a Uvicorn test server
+
+            Args:
+                app (FastAPI, optional): the FastAPI src. Defaults to main.src.
+                host (str, optional): the host ip. Defaults to '127.0.0.1'.
+                port (int, optional): the port. Defaults to PORT.
+            """
+            self._startup_done = asyncio.Event()
+
+            super().__init__(config=uvicorn.Config(app, host=host, port=port))
+
+
+        async def startup(self, sockets: list | None = None) -> None:
+            """Override uvicorn startup"""
+            await super().startup(sockets=sockets)
+            self.config.setup_event_loop()
+            self._startup_done.set()
+
+        async def up(self) -> None:
+            """Start up server asynchronously"""
+            self._serve_task = asyncio.create_task(self.serve())
+            await self._startup_done.wait()
+
+        async def down(self) -> None:
+            """Shut down server asynchronously"""
+            self.should_exit = True
+            await self._serve_task
+
+    server = UvicornTestServer()
+    await server.up()
+    yield server.servers[0].sockets[0].getsockname()[1]
+    await server.down()
+
+{% else %}
+
+@pytest.fixture()
+def app(override_settings, override_logs_file) -> FastAPI:
+    fastapi_app.include_router(test_router, prefix="/tests")
+    return fastapi_app
+
+{% endif %}
+
+@pytest.fixture()
+def log_file() -> IO:
+    with open(LOGS_DIR / test_logs_file, "r") as f:
+        f.read()  # set pointer to end of file
+        yield f
+
+{% if cookiecutter.use_auth0 | bool %}
+
+@pytest.fixture()
+def jwt_admin() -> str:
+    yield admin_jwt.get_signed_jwt()
+
+{% endif %}
+
+
+{% if cookiecutter.use_socketio | bool %}
+@pytest.fixture()
+def sio_client() -> socketio.AsyncClient:
+    return socketio.AsyncClient(logger=True)
+{% endif %}
+
+{% if cookiecutter.use_graphql | bool %}
+@pytest.fixture()
+async def graphql_schema(client) -> Schema:
+    return schema
+{% endif %}
+
+
+@pytest.fixture(autouse=True)  # auto use to init fastapi
+async def client(app,{% if cookiecutter.database | bool %} mock_db{% endif %}) -> TestClient:
+    {% if cookiecutter.use_auth0 | bool %}
+    headers = {"Authorization": f"Bearer {admin_jwt.get_signed_jwt()}"}
+    {% endif -%}
+    # admin has all permissions
+    with TestClient(app=app, base_url="http://test", {% if cookiecutter.use_auth0 | bool %}headers=headers{% endif %}) as c:
+        yield c
+
+{% if cookiecutter.database | bool %}
+@pytest.fixture()
+async def mock_db(monkeypatch{% if cookiecutter.database == "MongoDB (beanie)" %}, add_test_documents{% endif %}):
+    monkeypatch.setattr(
+        config.database,
+        "db_client",
+        {% if cookiecutter.__async_db_driver | bool -%}
+        AsyncMongoMockClient(tz_aware=True, uuidRepresentation="standard"),
+        {% else %}
+        MongoClient(tz_aware=True, uuidRepresentation="standard"),
+        {%- endif %}
+    )
+
+{% endif %}
+{% if cookiecutter.database == "MongoDB (beanie)" -%}
+
+@pytest.fixture()
+def add_test_documents(monkeypatch):
+    def get_test_documents():
+        return DOCUMENTS + TEST_DOCUMENTS
+
+    monkeypatch.setattr(config.database, "get_documents", get_test_documents)
+
+{% endif %}
+
+{% if cookiecutter.use_auth0 | bool -%}
+
+@pytest.fixture()
+def user_factory(random_str_id) -> Callable[..., authentication.AuthUser]:
+    def _construct_user(
+            sub=None,
+            permissions=None,
+            **kwargs
+    ):
+        sub = sub or f"auth0|{random_str_id()}"
+        permissions = permissions or Permissions._all()
+        return authentication.AuthUser(
+            sub=sub,
+            permissions=permissions,
+            **kwargs
+        )
+
+    yield _construct_user
+
+{% endif -%}
+
+@pytest.fixture()
+def random_str_id() -> Callable[..., str]:
+    i = 0
+
+    def _counter() -> str:
+        nonlocal i
+        i += 1
+        return f"{i:08d}"
+
+    yield _counter
+

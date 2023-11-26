@@ -1,0 +1,333 @@
+import dataclasses
+import logging
+import uuid
+from collections.abc import Callable
+from datetime import timedelta
+from typing import Iterable, Annotated
+import re
+import time
+
+import pydantic
+from fastapi import HTTPException, Depends, status
+from fastapi.security import SecurityScopes, HTTPAuthorizationCredentials, HTTPBearer
+import requests
+from fastapi import Depends, HTTPException, status
+{% if cookiecutter.use_gcp_pubsub | bool %}
+from google.auth.exceptions import GoogleAuthError
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token
+{% endif %}
+from jose import jwt
+from pydantic import BaseModel, Field, Extra, ValidationError, ConfigDict
+
+from src.config.env_settings import get_env_settings, EnvSettings
+from src.config.fake_jwks import key_pair, local_jwks
+
+
+class AuthenticationError(Exception):
+    pass
+
+class WrongCredentials(Exception):
+    ...
+
+
+class JWTNotValid(Exception):
+    ...
+
+
+class UserUnverified(Exception):
+    ...
+
+
+class MissingPermissions(Exception):
+    ...
+
+class Permissions:  # TODO-CONFIG fill permissions + sync with auth0 API
+    ADMIN = "admin:{{ cookiecutter.__app_name }}"
+
+    @classmethod
+    def _all(cls) -> list[str]:
+        return [value for key, value in vars(cls).items() if not key.startswith("_")]
+
+
+def retrieve_jwks(settings: Annotated[EnvSettings, Depends(get_env_settings)]):
+    if settings.mock_auth:
+        return local_jwks
+
+    try:
+        return requests.get(settings.jwk_url, timeout=1).json()
+    except requests.JSONDecodeError as e:
+        logging.error(e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Couldn't retrieve key to verify jwt signature. Please contact an admin"
+        ) from e
+
+class JWTPayload(pydantic.BaseModel):
+    model_config = ConfigDict(extra=Extra.allow)
+    iat: int
+    exp: int
+    sub: str
+    permissions: set[str]
+
+    @property
+    def age_in_seconds(self) -> float:
+        return time.time() - self.iat
+
+    @property
+    def user_id(self) -> int:
+        return int(self.sub)
+
+
+@dataclasses.dataclass
+class AuthUser:
+    """
+    Parses relevant information from a decoded and verified JWT.
+    Can be used as a wrapper around the actual DB User document
+    """
+
+    sub: str  # id is the whole sub, not the auth0_id
+    permissions: set[str]
+
+    @property
+    def auth0_id(self) -> str:
+        return self.sub.split("|")[1]
+
+FAKE_AUTH_USER = AuthUser(sub="noauthuser", permissions=set(Permissions._all()))
+
+def authenticate_user(
+    token: str,
+    max_jwt_age: int | None = None,
+) -> AuthUser:
+    """
+    :raises AuthenticationError if: jwt cannot be decoded, is invalid or
+    the claims do not match,
+    if the user cannot be found (should be an internal error?)
+    """
+    env = get_env_settings()
+    if env.deactivate_auth:
+        return FAKE_AUTH_USER
+
+    jwks = retrieve_jwks(env)
+    try:
+        key_id = jwt.get_unverified_header(token)["kid"]
+    except jwt.JWTError as e:
+        raise AuthenticationError(f"Error: Invalid token header: {e}") from e
+    key = next((k for k in jwks["keys"] if k.get("kid") == key_id), None)
+    if not key:
+        raise AuthenticationError(f"Public key not found for this jwt")
+
+    try:
+        unvalidated_payload = jwt.decode(
+            token,
+            key=key,
+            audience=env.auth0_audience,
+            issuer=env.auth0_issuer,
+            algorithms=[env.auth0_algorithms],
+            options={
+                "require_iat": True,
+                "require_exp": True,
+                "require_sub": True,
+            },
+        )
+    except (jwt.ExpiredSignatureError, jwt.JWTClaimsError, jwt.JWTError) as e:
+        raise JWTNotValid(str(e)) from e
+
+    try:
+        jwt_payload = JWTPayload(**unvalidated_payload)
+    except ValidationError as e:
+        raise JWTNotValid(str(e))
+
+    # meant for critical apis -> require user to log in again to verify his identity again
+    if max_jwt_age is not None and jwt_payload.age_in_seconds > max_jwt_age:
+        raise JWTNotValid(
+            f"The jwt is too old. It should be max {max_jwt_age / 60:0.1d} "
+            f"minutes old. (Actual: {jwt_payload.iat / 60:0.1d})"
+        )
+    return AuthUser(permissions=jwt_payload.permissions, sub=jwt_payload.sub)
+
+
+def authorize_user(user: AuthUser, required_permissions: set[str]) -> None:
+    """
+    :param user: AuthUser
+    :param required_permissions: set[str]
+    :raises: MissingPermissions if at least one permission is missing
+    """
+    missing_permissions = set()
+    if Permissions.ADMIN not in user.permissions:
+        missing_permissions = required_permissions.difference(user.permissions)
+
+    if missing_permissions:
+        raise MissingPermissions(f"At least one permission missing: {missing_permissions}")
+
+
+oauth2_scheme = HTTPBearer()
+
+
+def get_user(max_jwt_age: int = 24 * 60 * 60) -> Callable[..., AuthUser]:
+    def _get_user(
+        scopes: SecurityScopes,
+        token: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
+    ) -> AuthUser:
+        """
+        Validates the bearer and the JWT in it, as well as the permissions.
+        :param scopes: The permissions the user must have to be
+        accepted
+        :param token: the bearer containing the encrypted JWT
+        for verifying a JWT's signature
+        :return: AuthenticatedUser (auth0 information) without the actual DB User
+        """
+        try:
+            user = authenticate_user(
+                token=token.credentials,
+                max_jwt_age=max_jwt_age,
+            )
+        except (JWTNotValid, WrongCredentials, UserUnverified) as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e)) from e
+
+        try:
+            authorize_user(user, required_permissions=set(scopes.scopes))
+        except MissingPermissions as e:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e)) from e
+
+        return user
+
+    return _get_user
+
+{% if cookiecutter.use_gcp_pubsub | bool %}
+
+class GoogleAuthenticator(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    token: HTTPAuthorizationCredentials
+    sa_mail: str
+    audience: str | None = None
+    request: google_requests.Request = Field(default_factory=google_requests.Request)
+
+
+    def authenticate_user(self) -> dict:
+        try:
+            claim = id_token.verify_oauth2_token(
+                self.token.credentials,
+                self.request,
+                audience=self.audience
+            )
+        except (ValueError, GoogleAuthError) as e:
+            logging.warning(f"Google authentication failed. Details: {e}")
+            raise AuthenticationError(
+                f"Could not check service account credentials."
+            ) from e
+        if not claim["email_verified"]:
+            raise AuthenticationError(f"Service account mail is not verified.")
+
+        if claim["email"] != self.sa_mail:
+            logging.warning(
+                f'Tried to authenticate with mail {claim["email"]} '
+                f'but only {self.sa_mail} is accepted.'
+            )
+            raise AuthenticationError(
+                f'Service account mail does not match expected SA. Given mail: {claim["email"]}'
+            )
+
+        return claim
+
+{% endif %}
+
+{% if cookiecutter.use_socketio | bool %}
+
+async def check_ws_auth(token: str, required_permissions: Iterable[str]):
+    try:
+        user = authenticate_user(token=token,)
+        authorize_user(user, required_permissions=set(required_permissions))
+    except (JWTNotValid, WrongCredentials, UserUnverified, MissingPermissions) as e:
+        raise ConnectionRefusedError(str(e)) from e
+
+    return user
+
+
+{% endif %}
+
+
+{% if cookiecutter.use_gcp_pubsub | bool %}
+
+async def pubsub_auth(
+    required_permissions: SecurityScopes,
+    token: HTTPAuthorizationCredentials = Depends(oauth2_scheme),
+    settings: EnvSettings = Depends(get_env_settings),
+) -> dict:
+    """
+    Verifies that the given token was signed by our GCP project, with
+    correct service account and audience.
+    Does not check permissions currently.
+    """
+    if not settings.is_pubsub_auth_active:
+        return {}
+
+    c = GoogleAuthenticator(
+        token=token,
+        sa_mail=settings.pubsub_service_account,
+        audience=settings.pubsub_audience,
+        # request=google_requests.Request()
+    )
+
+    try:
+        user = c.authenticate_user()
+    except AuthenticationError as e:
+        raise HTTPException(detail=str(e), status_code=status.HTTP_401_UNAUTHORIZED) from e
+    return user
+
+{% endif %}
+
+"""
+Faking the Auth0 instance by having a public-private key locally 
+-> jwks retrieval is overwritten / monkeypatched
+-> we can sign our own jwts with any permissions, run tests without 
+any internet connection.
+Should only be used for testing purposes / local deployment 
+(as it does not provide secure authentication, with private key in 
+repository).
+"""
+
+
+def generate_sub() -> str:
+    return f"google-auth|{uuid.uuid4()}"
+
+
+def ts_earlier() -> int:
+    return int(time.time() - timedelta(hours=1).total_seconds())
+
+
+def ts_later() -> int:
+    return int(time.time() + timedelta(days=1).total_seconds())
+
+
+class JWTFaker(BaseModel):
+    sub: str = Field(default_factory=generate_sub)
+    permissions: list[str] = Field(default_factory=list)
+    issuer: str = Field(get_env_settings().auth0_issuer, alias="iss")
+    audience: str = Field(get_env_settings().auth0_audience, alias="aud")
+    t_generated: int = Field(default_factory=ts_earlier, alias="iat")
+    t_expiral: int = Field(default_factory=ts_later, alias="exp")
+    azp: str = "AB9e5WvuL7W43CoBFgEMifv8Esq3yGhh"
+    scope: str = "openid profile email"
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    def get_payload(self) -> dict:
+        return self.model_dump(by_alias=True)
+
+    def get_signed_jwt(self) -> str:
+        return jwt.encode(
+            self.get_payload(), key_pair, get_env_settings().auth0_algorithms,
+            headers={"kid": key_pair["kid"]}
+        )
+
+    def auth0_id(self) -> str:
+        return self.sub.split("|")[1]
+
+
+admin_jwt = JWTFaker(permissions=Permissions._all())
+
+unknown_role_permissions = ["read:some_custom_resource"]
+alien_jwt = JWTFaker(permissions=unknown_role_permissions)
+

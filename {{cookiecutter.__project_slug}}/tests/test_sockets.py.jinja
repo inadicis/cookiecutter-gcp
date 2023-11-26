@@ -1,0 +1,38 @@
+import asyncio
+
+import pytest
+
+
+async def ws_connect(
+        sio_client,
+        port: int,
+        {% if cookiecutter.use_auth0 | bool %}
+        jwt: str,
+        {% endif %}
+):
+    await sio_client.connect(
+        f"http://localhost:{port}", socketio_path="/ws",
+        {% if cookiecutter.use_auth0 | bool %}
+        auth={"token": jwt},
+        {% endif %}
+    )
+
+
+@pytest.mark.asyncio
+async def test_ws_with_my_client(
+        server_port,
+        {% if cookiecutter.use_auth0 | bool %}
+        jwt_admin,
+        {% endif %}
+        sio_client):
+    future = asyncio.get_running_loop().create_future()
+
+    @sio_client.event
+    async def pong(data):
+        future.set_result(data)
+
+    message = "Hello!"
+    await ws_connect(sio_client, port=server_port,{% if cookiecutter.use_auth0 | bool %} jwt=jwt_admin,{% endif %})
+    await sio_client.emit("ping", message)
+    await asyncio.wait_for(future, timeout=1)
+    assert future.result() == message

@@ -1,0 +1,6 @@
+default_context:
+#    use_socketio: "No"
+#    use_filters_package: "No"
+#    __keep_internal_readmes: "No"
+    trim_blocks: true
+    lstrip_blocks: true

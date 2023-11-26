@@ -1,0 +1,95 @@
+asyncapi: 2.2.0
+
+info:
+  title: $TITLE
+  version: $VERSION
+  description: $DESC
+   # this is currently populated by jinja.replace, not optimal
+
+servers:
+  development:
+    url: / # TODO-CONFIG
+    protocol: rest + socketio
+    security:
+      - auth0: []
+      - google_auth: [] # usage for e.g. pubsub service accounts
+defaultContentType: application/json
+
+channels:
+  /:
+    description: Main namespace, used by editors reviewing/correcting articles
+    publish: # client -> server events
+      message:
+        name: ping
+        payload:
+          type: integer
+          format: int64
+          description: The ping message emitted by the client with an integer timestamp representing time of emitting.
+
+    subscribe: # server -> client events
+      message:
+        oneOf:
+          - name: welcome
+            payload:
+              $ref: '#/components/schemas/welcome'
+              description: The welcome message emitted by the server upon client connection with all data a client needs for initialization.
+          - name: pong
+            payload:
+              type: object
+              properties:
+                receivedTimestamp:
+                  type: integer
+                  format: int64
+                  description: The timestamp received from the client's ping message.
+                serverTimestamp:
+                  type: integer
+                  format: int64
+                  description: The timestamp created by the server at reception time.
+              required:
+                - serverTimestamp
+components:
+  schemas:
+    welcome:
+      type: object
+      properties:
+        userId:
+          type: string
+          description: The unique identifier of the connected user.
+        username:
+          type: string
+          description: The username of the connected user.
+        connectionTime:
+          type: string
+          format: date-time
+          description: The timestamp when the user connected.
+        additionalInfo:
+          type: object
+          description: Additional information about the user, provided as key-value pairs.
+      required:
+        - userId
+        - username
+        - connectionTime
+
+  securitySchemes:
+    auth0:
+      type: oauth2
+      flows:
+        implicit: # not sure if this is correct
+          authorizationUrl: https://qapp-dev.eu.auth0.com/
+          scopes:
+            admin:robin_qa: All-mighty user
+            read:articles: read robin articles
+            edit:articles: edit robin articles
+
+    google_auth:
+      type: oauth2
+      flows:
+        implicit:
+          authorizationUrl: https://www.googleapis.com/
+          scopes:
+            :: All actions
+
+
+
+    #google_auth:
+    #  type: oauth2

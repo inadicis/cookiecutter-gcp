@@ -1,0 +1,182 @@
+"""
+Configuration of .env variables and logging, as well as other settings constants
+"""
+from functools import lru_cache
+
+from pydantic import Field, ValidationError, field_validator
+from pydantic_core.core_schema import FieldValidationInfo
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from src.config import BASE_DIR, DEPLOYMENT_DIR, DeployEnvironments, APP_DIR
+
+
+
+class EnvSettings(BaseSettings):
+    """
+    read env variables, cast and validate them.
+    variable names are case insensitive.
+    """
+    model_config = SettingsConfigDict(env_file=DEPLOYMENT_DIR / ".env", validate_default=True)
+
+    deploy_environment: DeployEnvironments = DeployEnvironments.LOCAL
+
+    {% if cookiecutter.database | bool %}
+    # Database
+    db_user: str = Field(
+        "",
+        description="Username for access of database. Only relevant for remote deployment",
+    )
+    db_password: str = Field(
+        "",
+        description="Password for access of database. Only relevant for remote deployment",
+    )
+    db_host: str = Field(default="localhost", validate_default=True)
+    db_port: int = Field(
+        27017,
+        description="Port of database. Only relevant for remote deployment",
+    )
+    db_name: str = "mobile_short_stories"
+    use_local_db: bool = Field(
+        default=True,
+        description="Whether to use a unauthenticated local database or a server remote database",
+    )
+    {% endif %}
+    {% if cookiecutter.use_auth0 | bool %}
+    # Authentication
+    deactivate_auth: bool = Field(
+        False,
+        description="If True, authentication does not read jwt at all, simply accepts all "
+        "requests and give a mock user ",
+    )
+    mock_auth: bool = Field(
+        True,
+        description="If True, instead of using auth0 jwks to verify a jwt signature, "
+        "use the hardcoded one. JWT can be generated a route as well."
+        "Cannot be True for remote environments",
+    )
+    auth0_domain: str = ""  # required if not mock_auth
+    auth0_algorithms: str = "RS256"
+    auth0_audience: str = ""
+    auth0_issuer: str = ""
+    {% endif %}
+    {% if cookiecutter.use_socketio | bool %}
+    amount_workers: int = 1
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_password: str = ""
+    ws_auth_activated: bool = True
+    {% endif %}
+    {% if cookiecutter.use_gcp_pubsub | bool %}
+    is_pubsub_auth_active: bool = False
+    pubsub_service_account: str = ""
+    pubsub_audience: str = ""
+    {% endif %}
+
+    @property
+    def debug(self) -> bool:
+        return self.deploy_environment != DeployEnvironments.PRODUCTION
+
+    {% if cookiecutter.__requires_redis | bool %}
+    @property
+    def redis_url(self):
+        {# TODO: have option to deploy locally but still access remote db#}
+        if self.deploy_environment.is_local:
+            return f"redis://{self.redis_host}:{self.redis_port}/0"
+        return f"redis://username:{self.redis_password}@{self.redis_host}:{self.redis_port}/0"
+        # redis does not provide user management, only global password,
+        # but is compliant with URI RFC, so we give "username" as username
+    {% endif %}
+
+    {% if cookiecutter.use_auth0 | bool %}
+    @property
+    def jwks_url(self) -> str:
+        return f"https://{self.auth0_domain}/.well-known/jwks.json"
+    {% endif %}
+
+    {% if cookiecutter.database | bool or cookiecutter.use_socketio | bool %}
+    @field_validator(
+        {% if cookiecutter.database | bool %}
+        "db_user",
+        "db_password",
+        {% endif %}
+        {% if cookiecutter.use_socketio | bool %}
+        "redis_password",
+        {% endif %}
+    )
+    @classmethod
+    def check_existence_for_remote_deployment(cls, v, info: FieldValidationInfo):
+        if DeployEnvironments.is_env_remote(info.data["deploy_environment"]) and not v:
+            raise ValueError(f"This env variable cannot be falsy in remote deployment! (value: {v})")
+        return v
+
+    @field_validator(
+        {% if cookiecutter.database | bool %}
+        "db_host",
+        {% endif %}
+        {% if cookiecutter.use_socketio | bool %}
+        "redis_host",
+        {% endif %}
+    )
+    @classmethod
+    def check_not_localhost_for_remote_deployment(cls, v, info: FieldValidationInfo):
+        if DeployEnvironments.is_env_remote(info.data["deploy_environment"]) and v in ["localhost", "127.0.0.1", "::1"]:
+            raise ValueError(f"Localhost is not possible for remote deployment! (value: {v})")
+        return v
+    {% endif %}
+
+
+    {% if cookiecutter.use_auth0 | bool or cookiecutter.database | bool %}
+    @field_validator(
+        {% if cookiecutter.use_auth0 | bool %}
+        "mock_auth",
+        {% endif %}
+        {% if cookiecutter.database | bool %}
+        "use_local_db",
+        {% endif %}
+    )
+    @classmethod
+    def ensure_false_for_remote_deployment(cls, v, info: FieldValidationInfo):
+        if DeployEnvironments.is_env_remote(info.data["deploy_environment"]):
+            return False  # overwrite the value instead of raising an exception
+        return v
+    {% endif %}
+
+    {% if cookiecutter.use_gcp_pubsub | bool %}
+    @field_validator("pubsub_service_account", "pubsub_audience")
+    @classmethod
+    def check_existence_if_pubsub_auth(cls, v, info: FieldValidationInfo):
+        if info.data["is_pubsub_auth_active"] and not v:
+            raise ValidationError(
+                f"This env variable cannot be falsy with pubsub auth active! (value: {v})"
+            )
+    {% endif %}
+
+
+    {% if cookiecutter.use_auth0 | bool %}
+    @field_validator("auth0_domain", "auth0_audience", "auth0_issuer")
+    @classmethod
+    def validate_values_set_if_not_auth_mocked(cls, v, info: FieldValidationInfo):
+        if not info.data["mock_auth"] and not info.data["deactivate_auth"] and not v:
+            raise ValidationError(
+                f"This env variable cannot be falsy if authentication is "
+                f"not mocked! (value: {v})"
+            )
+        return v
+    {% endif %}
+
+    {% if cookiecutter.database | bool %}
+    @property
+    def mdb_connection_string(self):
+        if self.use_local_db:  # no auth for the local database
+            return f"mongodb://{self.db_host}:{self.db_port}"
+
+        return (
+            f"mongodb+srv://{self.db_user}:{self.db_password}@{self.db_host}"
+            f"/?retryWrites=true&w=majority"
+        )
+    {% endif %}
+
+
+@lru_cache(maxsize=1)
+def get_env_settings() -> EnvSettings:
+    return EnvSettings()

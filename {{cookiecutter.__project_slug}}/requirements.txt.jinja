@@ -1,0 +1,70 @@
+# Web App
+fastapi > 0.100.0
+pydantic > 2.0.0
+pydantic-settings
+uvicorn[standard]
+requests >= 2.31.0
+{% if cookiecutter.use_gradio | bool -%}
+gradio
+{% endif -%}
+{% if cookiecutter.use_graphql | bool %}
+strawberry-graphql[fastapi]
+{% endif %}
+
+{% if cookiecutter.use_auth0 | bool -%}
+# Authentication
+python-jose[cryptography]
+{% endif -%}
+
+# Environment Variables + Settings
+python-dotenv
+toml>=0.10.2
+
+{% if cookiecutter.database | bool -%}
+# Database
+pymongo[srv]
+{% endif -%}
+{% if cookiecutter.__async_db_driver | bool -%}
+motor
+mongomock-motor
+{% else %}
+mongomock
+{% endif -%}
+{% if cookiecutter.database == "MongoDB (beanie)" -%}
+beanie
+{% endif -%}
+
+# Testing
+pytest
+pytest-asyncio
+httpx
+
+# GCP
+google-cloud-core==2.2.2
+google-cloud-logging==3.0.0
+{% if cookiecutter.use_gcp_pubsub | bool -%}
+google-cloud-pubsub
+{% endif -%}
+
+regex
+
+{% if cookiecutter.use_filters_package | bool -%}
+# Internal packages
+${PYPITOKEN}ella_filtersapi
+{% endif -%}
+
+{% if cookiecutter.use_socketio | bool -%}
+websockets
+python-socketio
+aiohttp
+redis
+{% endif -%}
+
+{% if cookiecutter.use_socketio | bool or cookiecutter.use_server_side_rendering | bool -%}
+jinja2
+{% endif -%}
+
+# Linting
+{% if cookiecutter.__linter == "ruff" -%}
+ruff
+{% endif -%}

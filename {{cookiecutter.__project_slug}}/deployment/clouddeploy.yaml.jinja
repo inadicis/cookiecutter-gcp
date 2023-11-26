@@ -1,0 +1,95 @@
+steps:
+  - id: Deploy-new-revision
+    name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    timeout: 300s
+    args:
+      - '-c'
+      - "\
+        gcloud run deploy ${_SERVICE_NAME} \
+        --image=$_DEPLOY_REGION-docker.pkg.dev/\
+        $PROJECT_ID/${_IMAGE_REPOSITORY}/${_IMAGE}:${TAG_NAME} \
+        --tag=${_REVISION_TAG} \
+        --revision-suffix=${_REVISION_TAG}-$$RANDOM \
+        --region=$_DEPLOY_REGION \
+        --min-instances=$_MIN_INSTANCES \
+        --max-instances=$_MAX_INSTANCES \
+        --service-account=${_RUN_SERVICE_ACCOUNT} \
+        --platform=managed \
+        --allow-unauthenticated \
+        --set-env-vars=\
+        {%- if cookiecutter.database | bool %}
+        DB_NAME=${_DB_NAME},\
+        {%- endif -%}
+        {%- if cookiecutter.use_auth0 | bool %}
+        AUTH0_DOMAIN=${_AUTH0_DOMAIN}:latest,\
+        AUTH0_AUDIENCE=${_AUTH0_AUDIENCE}:latest,\
+        AUTH0_ISSUER=${_AUTH0_ISSUER}:latest,\
+        {%- endif -%}
+        {% if cookiecutter.use_gcp_pubsub | bool %}
+        PUBSUB_SERVICE_ACCOUNT=${_PUBSUB_SERVICE_ACCOUNT},\
+        PUBSUB_AUDIENCE=${_PUBSUB_AUDIENCE},\
+        PUBSUB_PROJECT_ID=${_PUBSUB_PROJECT_ID},\
+        PUBSUB_TOPIC=${_PUBSUB_TOPIC},\
+        {%- endif %}
+        {%- if cookiecutter.__requires_redis | bool %}
+        REDIS_PORT=6379,\
+        {%- endif %}
+        DEPLOY_ENVIRONMENT=${_DEPLOY_ENVIRONMENT},\
+        KEEP_THIS_AS_LAST_ENV=true \
+        {% if cookiecutter.__needs_secrets | bool -%}
+        --set-secrets=\
+        {%- if cookiecutter.database | bool %}
+        DB_HOST=${_DB_HOST_SECRET}:latest,\
+        DB_PASSWORD=${_DB_PASS_SECRET}:latest,\
+        DB_USER=${_DB_USER_SECRET}:latest,\
+        {%- endif -%}
+        {% if cookiecutter.__requires_redis | bool %}
+        REDIS_HOST=${_REDIS_HOST_SECRET}:latest,\
+        REDIS_PASSWORD=${_REDIS_PASS_SECRET}:latest,\
+        {% endif -%}
+        {% endif %}
+      "
+
+tags:
+  - deploy
+  - $_SERVICE_NAME
+  - $_DEPLOY_ENVIRONMENT
+  - $TAG_NAME
+
+# TODO-CONFIG verify and update substitutions
+substitutions:
+  _DEPLOY_REGION: europe-west3
+  _SERVICE_NAME: {{ cookiecutter.__gcp_service_prefix}}
+  _IMAGE_REPOSITORY: {{ cookiecutter.__image_repo}}
+  _IMAGE: {{ cookiecutter.__image_name}}
+  _REVISION_TAG: ${TAG_NAME//./-}
+  _RUN_SERVICE_ACCOUNT:
+{% if cookiecutter.database | bool %}
+  _DB_NAME: {{ cookiecutter.__db_name}}
+  _DB_HOST_SECRET:
+  _DB_PASS_SECRET:
+  _DB_USER_SECRET:
+{% endif %}
+{% if cookiecutter.use_socketio | bool %}
+  _REDIS_HOST_SECRET: {{ cookiecutter.__project_slug.upper() }}_REDIS_IP
+  _REDIS_PASS_SECRET: {{ cookiecutter.__project_slug.upper() }}_REDIS_PASSWORD
+{% endif %}
+{% if cookiecutter.use_auth0 | bool %}
+  _AUTH0_DOMAIN:
+  _AUTH0_AUDIENCE:
+  _AUTH0_ISSUER:
+{% endif -%}
+{% if cookiecutter.use_gcp_pubsub | bool -%}
+  _PUBSUB_PROJECT_ID:
+  _IMAGE_PROJECT_ID:
+  _PUBSUB_TOPIC:
+{% endif -%}
+  # TODO-CONFIG Set those substitutions in trigger
+  _DEPLOY_ENVIRONMENT:
+  _MIN_INSTANCES:
+  _MAX_INSTANCES:
+
+options:
+    dynamic_substitutions: true
+    logging: CLOUD_LOGGING_ONLY

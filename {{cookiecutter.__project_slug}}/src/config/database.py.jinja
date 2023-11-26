@@ -1,0 +1,41 @@
+from functools import lru_cache
+import logging
+
+{% if cookiecutter.__async_db_driver | bool %}
+from motor.motor_asyncio import AsyncIOMotorClient
+{% if cookiecutter.database == "MongoDB (beanie)" %}
+import beanie
+{% endif %}
+{% else %}
+from pymongo import MongoClient
+{% endif %}
+
+from src.config.env_settings import get_env_settings
+from src.config.project_settings import get_project_settings
+
+
+db_client = {% if cookiecutter.__async_db_driver | bool %}AsyncIOMotor{% else %}Mongo{% endif %}Client(
+    get_env_settings().mdb_connection_string,
+    tz_aware=True,
+    uuidRepresentation="standard",
+)
+
+
+{% if cookiecutter.database == "MongoDB (beanie)" %}
+
+DOCUMENTS = []
+# TODO-CONFIG has to be kept up to date with the collections we
+#  want to use with beanie
+
+
+def get_documents() -> list[type[beanie.Document]]:
+    return DOCUMENTS
+
+
+async def connect_database():
+    logging.info(f"{get_project_settings().name}: Connecting to database")
+    await beanie.init_beanie(db_client[get_env_settings().db_name], document_models=get_documents())
+{% else %}
+def get_db():
+    return db_client[get_env_settings().db_name]
+{% endif %}

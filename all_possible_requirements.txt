@@ -1,0 +1,55 @@
+cookiecutter>=2.1.1
+ruff
+black
+pytest>=7.2.2
+strawberry-graphql[fastapi]
+
+requests>=2.28.2
+toml>=0.10.2
+
+# Web App
+fastapi>=0.100.0
+pydantic>=2.0.0
+pydantic-settings
+uvicorn[standard]
+gradio
+
+# Authentication
+python-jose[cryptography]
+requests >= 2.31.0
+
+# Environment Variables + Settings
+python-dotenv
+toml>=0.10.2
+
+# Database
+pymongo[srv]
+motor
+beanie
+
+# Testing
+pytest
+pytest-asyncio
+httpx
+mongomock-motor
+pytest-xdist[psutil]
+
+# GCP
+google-cloud-core==2.2.2
+google-cloud-logging==3.0.0
+google-cloud-pubsub
+
+regex
+
+# Internal packages
+${PYPITOKEN}ella_filtersapi
+
+websockets
+python-socketio
+aiohttp
+redis
+
+jinja2
+
+# Linting
+ruff

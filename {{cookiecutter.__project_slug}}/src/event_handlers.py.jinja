@@ -1,0 +1,49 @@
+"""
+Example usage of socketio to have a simple websocket connection with a
+ping-pong between client and server before disconnecting
+"""
+import logging
+
+from src.config.env_settings import get_env_settings
+from src.config.sockets import sio
+{% if cookiecutter.use_auth0 | bool %}
+from src.authentication import check_ws_auth, Permissions
+{% endif -%}
+
+MY_ROOM = "myroom"
+
+
+async def connect(sid, environ, auth: dict[str, str]):
+    """
+    auth: jwt token
+    """
+    logging.debug(f"{sid} connecting")
+    settings = get_env_settings()
+    {% if cookiecutter.use_auth0 | bool -%}
+    if settings.ws_auth_activated:
+        if auth is None:
+            raise ConnectionRefusedError("No credentials were given!")
+        user = await check_ws_auth(auth["token"], required_permissions=[Permissions.ADMIN])
+    {% endif -%}
+    logging.debug(f"{sid} connected")
+    sio.enter_room(sid, MY_ROOM)
+
+
+async def disconnect(sid):
+    sio.leave_room(sid, MY_ROOM)
+    logging.debug(f"{sid} disconnected")
+
+
+async def ping(sid, data):
+    logging.debug(f'{sid}: ping received with "{data}". Emitting Pong back')
+    await sio.emit("pong", data, to=sid)
+
+
+async def pong(sid, data, ):
+    logging.debug(f'{sid}: Pong received with "{data}". Disconnecting.')
+    await sio.disconnect(sid)
+
+
+async def hello_local(sid, data):
+    logging.debug(f'{sid}: hello_local received with "{data}". Emitting Hello back')
+    await sio.emit("hello_back", data, to=sid)

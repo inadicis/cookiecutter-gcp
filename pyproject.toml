@@ -1,0 +1,32 @@
+[project]
+name = "ella-cookiecutter"
+version = "2.4.0"
+description = """Project Template for backend services.
+Provides easy project creation through a command line interface (cookiecutter),
+with the configuration of the tech-stack provided (especially GCP CI/CD pipeline,
+but also logging, databases, fastapi, socketio, pubsubs, ssr etc.)."""
+readme = "README.md"
+requires-python = ">=3.9"
+#license
+authors = [
+    { name = "Nils Cichy", email = "nilsdaniel.cichy@gmail.com" }
+]
+
+[project.urls]
+repository = "https://github.com/inadicis/cookiecutter-gcp"
+
+
+[tool.pytest.ini_options]
+pythonpath = [
+    "."
+]
+
+asyncio_mode = "auto"
+
+
+[tool.black]
+line-length = 99
+target-version = ['py311']
+extend_exclude = """
+^/venv
+"""

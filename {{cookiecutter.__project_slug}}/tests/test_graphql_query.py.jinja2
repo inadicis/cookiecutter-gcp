@@ -1,0 +1,50 @@
+import dataclasses
+
+import pytest
+from strawberry import Schema
+
+{% if cookiecutter.use_auth0 | bool %}
+from src.graphql import Context
+{% endif %}
+
+
+{% if cookiecutter.use_auth0 | bool %}
+
+@pytest.fixture()
+def fake_context(jwt_admin) -> Context:
+    context = Context()
+
+    @dataclasses.dataclass
+    class FakeRequest:
+        headers: dict
+
+    context.request = FakeRequest(headers={"Authorization": jwt_admin})
+    return context
+
+{% endif %}
+
+@pytest.mark.asyncio
+async def test_query_examples(
+        {% if cookiecutter.use_auth0 | bool %}
+        fake_context: Context,
+        {% endif %}
+        graphql_schema: Schema,
+):
+    query = """
+        {
+            examples(options: {}) {
+                amount
+            }
+        }
+    """
+
+    result = await graphql_schema.execute(
+        query,
+        # variable_values={"title": "The Great Gatsby"},
+        {%- if cookiecutter.use_auth0 | bool %}
+        context_value=fake_context,
+        {% endif %}
+    )
+
+    assert result.errors is None
+    assert result.data["examples"] == [{"amount": i} for i in range(10)]

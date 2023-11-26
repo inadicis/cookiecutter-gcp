@@ -1,0 +1,8 @@
+from starlette.templating import Jinja2Templates
+
+from src.config import APP_DIR
+
+{% if cookiecutter.use_socketio | bool or cookiecutter.use_server_side_rendering | bool %}
+TEMPLATES_DIR = APP_DIR / "templates"
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+{% endif -%}
