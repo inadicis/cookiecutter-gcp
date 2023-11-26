@@ -99,6 +99,25 @@ REMOVE_PATHS = [
     {% endif %}
 ]
 
+def change_read_only(func, path, exc_info):
+    """
+    Error handler for ``shutil.rmtree``.
+
+    If the error is due to an access error (read only file)
+    it attempts to add write permission and then retries.
+
+    If the error is for another reason it re-raises the error.
+
+    Usage : ``shutil.rmtree(path, onerror=onerror)``
+    """
+    import stat
+    # Is the error an access error? (read only file)
+    if not os.access(path, os.W_OK):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    else:
+        raise
+
 
 for relative_path in REMOVE_PATHS:
     # try deleting with and without jinja extension
@@ -109,7 +128,7 @@ for relative_path in REMOVE_PATHS:
             continue
 
         if path.is_dir():
-            shutil.rmtree(path)
+            shutil.rmtree(path, onerror=change_read_only)
             print(f" - Directory {path} deteled")
         else:
             path.unlink()

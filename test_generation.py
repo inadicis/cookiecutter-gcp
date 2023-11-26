@@ -71,4 +71,24 @@ def test_generation(
     assert (new_project_path / "pyproject.toml").exists()
 
     if new_project_path.exists():
-        shutil.rmtree(new_project_path)
+        shutil.rmtree(new_project_path, onerror=change_read_only)
+
+
+def change_read_only(func, path, exc_info):
+    """
+    Error handler for ``shutil.rmtree``.
+
+    If the error is due to an access error (read only file)
+    it attempts to add write permission and then retries.
+
+    If the error is for another reason it re-raises the error.
+
+    Usage : ``shutil.rmtree(path, onerror=onerror)``
+    """
+    import stat
+    # Is the error an access error? (read only file)
+    if not os.access(path, os.W_OK):
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    else:
+        raise
